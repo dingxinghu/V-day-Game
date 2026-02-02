@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Valentine Doors</title>
+  <style>
+    :root {
+      --bg: #fff7fb;
+      --ink: #2b2b2b;
+    }
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: var(--bg);
+      font-family: ui-rounded, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      color: var(--ink);
+    }
+    .wrap {
+      display: grid;
+      place-items: center;
+      height: 100%;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+    canvas {
+      width: min(900px, 96vw);
+      height: auto;
+      border-radius: 18px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.08);
+      background: white;
+    }
+    .hint {
+      margin-top: 12px;
+      font-size: 14px;
+      opacity: .75;
+      text-align: center;
+      line-height: 1.4;
+    }
+    .hint kbd{
+      padding: 2px 6px;
+      border-radius: 8px;
+      border: 1px solid rgba(0,0,0,.15);
+      background: rgba(255,255,255,.8);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div>
+      <canvas id="game" width="900" height="520" aria-label="Valentine Doors Game"></canvas>
+      <div class="hint">
+        Walk with <kbd>←</kbd><kbd>↑</kbd><kbd>→</kbd><kbd>↓</kbd>.
+        Go to the left door for “Yes”. The right door stays closed.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /***********************
+     * CONFIG (edit here)
+     ***********************/
+    const VALENTINE_NAME = "Sami";
+    const QUESTION = `Will you be my valentine, ${VALENTINE_NAME}?`;
+    const SUCCESS_MESSAGE = "Laser Wolf dinner on february 14 @7 pm";
+
+    // Door rule: same side always
+    const YES_DOOR_SIDE = "left"; // "left" or "right"
+
+    /***********************
+     * CANVAS SETUP
+     ***********************/
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+
+    // Simple “world” bounds
+    const W = canvas.width;
+    const H = canvas.height;
+
+    // Game state
+    const STATE = {
+      mode: "question", // "question" | "success"
+      t: 0,
+    };
+
+    // Input
+    const keys = new Set();
+    window.addEventListener("keydown", (e) => {
+      const k = e.key;
+      if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(k)) {
+        e.preventDefault();
+        keys.add(k);
+      }
+    }, { passive: false });
+    window.addEventListener("keyup", (e) => keys.delete(e.key));
+
+    /***********************
+     * OBJECTS
+     ***********************/
+    function rectsOverlap(a, b) {
+      return (
+        a.x < b.x + b.w &&
+        a.x + a.w > b.x &&
+        a.y < b.y + b.h &&
+        a.y + a.h > b.y
+      );
+    }
+
+    const player = {
+      x: W/2 - 20,
+      y: H - 120,
+      w: 40,
+      h: 44,
+      speed: 220, // px/sec
+      dir: "down",
+    };
+
+    // Doors
+    const doorY = 125;
+    const doorW = 120;
+    const doorH = 170;
+    const gap = 120;
+
+    const leftDoor = {
+      x: (W/2) - gap/2 - doorW,
+      y: doorY,
+      w: doorW,
+      h: doorH,
+      label: "YES",
+    };
+    const rightDoor = {
+      x: (W/2) + gap/2,
+      y: doorY,
+      w: doorW,
+      h: doorH,
+      label: "NO",
+    };
+
+    function yesDoor() {
+      return YES_DOOR_SIDE === "left" ? leftDoor : rightDoor;
+    }
+    function noDoor() {
+      return YES_DOOR_SIDE === "left" ? rightDoor : leftDoor;
+    }
+
+    /***********************
+     * DRAW HELPERS
+     ***********************/
+    function roundedRect(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x+r, y);
+      ctx.arcTo(x+w, y, x+w, y+h, r);
+      ctx.arcTo(x+w, y+h, x, y+h, r);
+      ctx.arcTo(x, y+h, x, y, r);
+      ctx.arcTo(x, y, x+w, y, r);
+      ctx.closePath();
+    }
+
+    function drawBackgroundQuestion() {
+      // soft sky gradient
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, "#ffeaf4");
+      g.addColorStop(1, "#ffffff");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+
+      // simple floor
+      ctx.fillStyle = "#fff0f7";
+      ctx.fillRect(0, H-130, W, 130);
+
+      // little hearts “clouds”
+      for (let i=0;i<14;i++){
+        const x = (i*67 + (STATE.t*12)%67) % W;
+        const y = 40 + (i%3)*18;
+        drawTinyHeart(x, y, 8);
+      }
+    }
+
+    function drawBackgroundSuccess() {
+      // heart-world gradient
+      const g = ctx.createLinearGradient(0, 0, W, H);
+      g.addColorStop(0, "#ffd6ea");
+      g.addColorStop(1, "#fff6fb");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+
+      // floating hearts
+      const count = 40;
+      for (let i=0;i<count;i++){
+        const phase = (STATE.t*1.2 + i*0.7);
+        const x = (i*23 + phase*40) % (W+60) - 30;
+        const y = 70 + (i*37 % 360) + Math.sin(phase)*10;
+        drawTinyHeart(x, y, 10 + (i%3)*3);
+      }
+
+      // soft ground
+      ctx.fillStyle = "rgba(255,255,255,0.5)";
+      ctx.fillRect(0, H-150, W, 150);
+    }
+
+    function drawTinyHeart(cx, cy, s) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.beginPath();
+      ctx.moveTo(0, s/4);
+      ctx.bezierCurveTo(0, -s/2, -s, -s/2, -s, s/6);
+      ctx.bezierCurveTo(-s, s, 0, s*1.1, 0, s*1.6);
+      ctx.bezierCurveTo(0, s*1.1, s, s, s, s/6);
+      ctx.bezierCurveTo(s, -s/2, 0, -s/2, 0, s/4);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(255,105,180,0.35)";
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawDoor(door, kind) {
+      // kind: "yes" or "no"
+      const isYes = kind === "yes";
+      const base = isYes ? "#b9fbc0" : "#ffd6a5"; // cute pastels
+      const border = isYes ? "#2a9d4b" : "#d17c00";
+
+      // door frame
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.12)";
+      ctx.shadowBlur = 10;
+      ctx.shadowOffsetY = 4;
+
+      roundedRect(door.x, door.y, door.w, door.h, 18);
+      ctx.fillStyle = base;
+      ctx.fill();
+
+      ctx.shadowColor = "transparent";
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = border;
+      ctx.stroke();
+
+      // inner panel
+      roundedRect(door.x+14, door.y+26, door.w-28, door.h-46, 14);
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.fill();
+
+      // knob
+      ctx.beginPath();
+      ctx.arc(door.x + door.w - 28, door.y + door.h/2 + 10, 8, 0, Math.PI*2);
+      ctx.fillStyle = "rgba(0,0,0,0.2)";
+      ctx.fill();
+
+      // label above
+      ctx.shadowColor = "transparent";
+      ctx.font = "700 22px ui-rounded, system-ui";
+      ctx.textAlign = "center";
+      ctx.fillStyle = border;
+      ctx.fillText(door.label, door.x + door.w/2, door.y - 14);
+
+      ctx.restore();
+    }
+
+    function drawDog(p) {
+      // simple cute dog made of shapes
+      ctx.save();
+      ctx.translate(p.x, p.y);
+
+      // body
+      ctx.fillStyle = "#c28a5b";
+      roundedRect(2, 14, p.w-4, p.h-14, 14);
+      ctx.fill();
+
+      // head
+      ctx.beginPath();
+      ctx.arc(p.w/2, 14, 18, 0, Math.PI*2);
+      ctx.fillStyle = "#d49a6a";
+      ctx.fill();
+
+      // ears
+      ctx.beginPath();
+      ctx.ellipse(p.w/2 - 14, 10, 7, 11, 0.3, 0, Math.PI*2);
+      ctx.ellipse(p.w/2 + 14, 10, 7, 11, -0.3, 0, Math.PI*2);
+      ctx.fillStyle = "#b7794c";
+      ctx.fill();
+
+      // eyes
+      ctx.fillStyle = "#2b2b2b";
+      ctx.beginPath();
+      ctx.arc(p.w/2 - 6, 13, 2.4, 0, Math.PI*2);
+      ctx.arc(p.w/2 + 6, 13, 2.4, 0, Math.PI*2);
+      ctx.fill();
+
+      // nose
+      ctx.beginPath();
+      ctx.arc(p.w/2, 18, 3.2, 0, Math.PI*2);
+      ctx.fillStyle = "#1f1f1f";
+      ctx.fill();
+
+      // tiny tail wag (visual only)
+      const wag = Math.sin(STATE.t * 10) * 0.4;
+      ctx.save();
+      ctx.translate(6, 26);
+      ctx.rotate(wag);
+      ctx.fillStyle = "#b7794c";
+      roundedRect(-8, 0, 10, 22, 8);
+      ctx.fill();
+      ctx.restore();
+
+      // feet
+      ctx.fillStyle = "rgba(0,0,0,0.12)";
+      ctx.beginPath();
+      ctx.ellipse(14, p.h-4, 8, 4, 0, 0, Math.PI*2);
+      ctx.ellipse(p.w-14, p.h-4, 8, 4, 0, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    function drawTopText() {
+      ctx.save();
+      ctx.textAlign = "center";
+
+      // title bubble
+      roundedRect(W/2 - 310, 18, 620, 62, 18);
+      ctx.fillStyle = "rgba(255,255,255,0.75)";
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(0,0,0,0.08)";
+      ctx.stroke();
+
+      ctx.font = "800 28px ui-rounded, system-ui";
+      ctx.fillStyle = "#2b2b2b";
+      ctx.fillText(QUESTION, W/2, 58);
+
+      ctx.restore();
+    }
+
+    function drawSuccessText() {
+      ctx.save();
+      ctx.textAlign = "center";
+
+      roundedRect(W/2 - 320, H/2 - 70, 640, 170, 22);
+      ctx.fillStyle = "rgba(255,255,255,0.78)";
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(0,0,0,0.08)";
+      ctx.stroke();
+
+      ctx.font = "900 36px ui-rounded, system-ui";
+      ctx.fillStyle = "#ff3b8d";
+      ctx.fillText("SHE SAID YES 💘", W/2, H/2 - 18);
+
+      ctx.font = "700 22px ui-rounded, system-ui";
+      ctx.fillStyle = "#2b2b2b";
+      ctx.fillText(SUCCESS_MESSAGE, W/2, H/2 + 26);
+
+      ctx.restore();
+    }
+
+    /***********************
+     * UPDATE + COLLISIONS
+     ***********************/
+    let last = performance.now();
+    function loop(now) {
+      const dt = Math.min(0.033, (now - last) / 1000);
+      last = now;
+      STATE.t += dt;
+
+      update(dt);
+      render();
+
+      requestAnimationFrame(loop);
+    }
+
+    function update(dt) {
+      if (STATE.mode !== "question") return;
+
+      let vx = 0, vy = 0;
+      if (keys.has("ArrowLeft"))  { vx -= 1; player.dir = "left"; }
+      if (keys.has("ArrowRight")) { vx += 1; player.dir = "right"; }
+      if (keys.has("ArrowUp"))    { vy -= 1; player.dir = "up"; }
+      if (keys.has("ArrowDown"))  { vy += 1; player.dir = "down"; }
+
+      // normalize diagonal
+      if (vx !== 0 && vy !== 0) {
+        vx *= 0.7071; vy *= 0.7071;
+      }
+
+      player.x += vx * player.speed * dt;
+      player.y += vy * player.speed * dt;
+
+      // bounds
+      player.x = Math.max(30, Math.min(W - player.w - 30, player.x));
+      player.y = Math.max(90, Math.min(H - player.h - 30, player.y));
+
+      // door collision
+      const pRect = { x: player.x, y: player.y, w: player.w, h: player.h };
+      if (rectsOverlap(pRect, yesDoor())) {
+        // open yes: switch world
+        STATE.mode = "success";
+      } else if (rectsOverlap(pRect, noDoor())) {
+        // no door: silent, do nothing
+        // (optional tiny nudge to prevent “sticking” inside the door)
+        // but per spec: silent. We'll just gently slide the player out:
+        player.y += 6;
+      }
+    }
+
+    function render() {
+      ctx.clearRect(0,0,W,H);
+
+      if (STATE.mode === "question") {
+        drawBackgroundQuestion();
+        drawTopText();
+
+        // doors
+        drawDoor(yesDoor(), "yes");
+        drawDoor(noDoor(), "no");
+
+        // dog
+        drawDog(player);
+
+        // subtle instruction line
+        ctx.save();
+        ctx.font = "600 16px ui-rounded, system-ui";
+        ctx.fillStyle = "rgba(0,0,0,0.45)";
+        ctx.textAlign = "center";
+        ctx.fillText("Walk to a door.", W/2, H - 18);
+        ctx.restore();
+      } else {
+        drawBackgroundSuccess();
+        drawSuccessText();
+
+        // dog in the heart world (center)
+        const p = { ...player, x: W/2 - player.w/2, y: H - 180 };
+        drawDog(p);
+      }
+    }
+
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
